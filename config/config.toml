@@ -1,0 +1,50 @@
+[CONF]
+SYSTEM_INSTRUCTIONS = "You are a helpful AI assistant."
+GLOBAL_IGNORES = [ "node_modules/", "build/", "dist/", ".git/", ".vscode/", ".idea/", "__pycache__",]
+CONTEXT_FILE_RATIO = 0.9
+ACTIVE_MODEL_IS_LOCAL = false
+ACTIVE_EMBED_IS_LOCAL = false
+OUTPUT_ACCEPTANCE_RETRIES = 1
+USE_CGRAG = true
+PRINT_CGRAG = false
+COMMIT_TO_GIT = false
+VERBOSE = false
+NO_COLOR = false
+HIDE_THINKING = true
+THINKING_START_PATTERN = "<think>"
+THINKING_END_PATTERN = "</think>"
+MODELS_PATH = "./models"
+EMBED_MODEL = ""
+LLM_MODEL = ""
+LITELLM_CONTEXT_SIZE = 200000
+LITELLM_EMBED_CONTEXT_SIZE = 2048
+LITELLM_MODEL_USES_SYSTEM_MESSAGE = false
+LITELLM_PASS_THROUGH_CONTEXT_SIZE = false
+LITELLM_EMBED_REQUEST_DELAY = 0
+
+[CONF.LLAMA_CPP_OPTIONS]
+n_ctx = 10000
+verbose = false
+
+[CONF.LLAMA_CPP_EMBED_OPTIONS]
+n_ctx = 8192
+n_batch = 512
+verbose = false
+rope_scaling_type = 2
+rope_freq_scale = 0.75
+
+[CONF.LLAMA_CPP_COMPLETION_OPTIONS]
+frequency_penalty = 1.1
+
+[CONF.LITELLM_API_KEYS]
+GEMINI_API_KEY = "AIzaSyDN4QH50wKxosdC9wnjECKF5HrJcfYBDqM"
+OPENAI_API_KEY = ""
+ANTHROPIC_API_KEY = ""
+
+[CONF.LITELLM_COMPLETION_OPTIONS]
+model = "gemini/gemini-2.0-flash"
+timeout = 600
+
+[CONF.LITELLM_EMBED_COMPLETION_OPTIONS]
+model = "gemini/text-embedding-004"
+timeout = 600
