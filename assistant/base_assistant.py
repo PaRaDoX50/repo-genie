@@ -94,15 +94,6 @@ class BaseAssistant:
     def create_empty_history(self, role="user"):
         return {"role": role, "content": "", "tokens": 0}
 
-    def create_one_off_prompt_history(self, prompt):
-        return [
-            {
-                "role": "user",
-                "content": prompt,
-                "tokens": self.count_tokens(prompt),
-            }
-        ]
-
     def create_prompt(self, user_input):
         return user_input
 
@@ -149,18 +140,8 @@ class BaseAssistant:
     def run_completion_generator(
         self, completion_output, output_message
     ):
-        print("Completion output: ", completion_output)
         for chunk in completion_output:
             delta = chunk["choices"][0]["delta"]
             if "content" in delta and delta["content"] != None:
                 output_message["content"] += delta["content"]
-        print("Output message: ", output_message)
         return output_message
-
-    def run_one_off_completion(self, prompt):
-        one_off_history = self.create_one_off_prompt_history(prompt)
-        completion_generator = self.call_completion(one_off_history)
-        output = self.run_completion_generator(
-            completion_generator, self.create_empty_history()
-        )["content"]
-        return output

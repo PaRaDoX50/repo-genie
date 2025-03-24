@@ -44,11 +44,7 @@ def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
                     with open(filepath, "r") as file:
                         contents = file.read()
                 except UnicodeDecodeError:
-                    if verbose:
-                        sys.stdout.write(
-                            f"Skipping {filepath} because it is not a text file.\n"
-                        )
-                        sys.stdout.flush()
+                    print(f"Skipping {filepath} because it is not a text file.\n")
                 file_info = {
                     "filepath": os.path.abspath(filepath),
                     "contents": contents,
@@ -74,11 +70,7 @@ def create_file_index(
             )
             files_with_contents.extend(folder_files)
         else:
-            if verbose:
-                sys.stdout.write(
-                    f"Warning: Additional folder {folder} does not exist\n"
-                )
-                sys.stdout.flush()
+            print(f"Warning: Additional folder {folder} does not exist\n")
 
     if not files_with_contents:
         return None, []
@@ -90,9 +82,6 @@ def create_file_index(
             filepath = file_info["filepath"]
             cached_chunks = cache.get(f"{filepath}_chunks")
             if cached_chunks and cached_chunks["mtime"] == file_info["mtime"]:
-                if verbose:
-                    sys.stdout.write(f"Using cached embeddings for {filepath}\n")
-                    sys.stdout.flush()
                 chunks.extend(cached_chunks["chunks"])
                 embeddings_list.extend(cached_chunks["embeddings"])
                 continue
@@ -121,9 +110,7 @@ def process_file(embed, filepath, contents, embed_chunk_size, verbose=False):
     start_line_number = 1
     chunks = []
     embeddings_list = []
-    if verbose:
-        sys.stdout.write(f"Creating embeddings for {filepath}\n")
-        sys.stdout.flush()
+    print(f"Creating embeddings for {filepath}\n")
     for line_number, line in enumerate(lines, start=1):
         # Process each line individually if needed
         line_content = line

@@ -12,9 +12,6 @@ from config.config import (
 
 litellm.suppress_debug_info = True
 
-MODELS_PATH = os.path.expanduser("~/.local/share/dir-assistant/models")
-
-
 def initialize_llm(args, config_dict):
     config = (
         config_dict["CONF"] if "CONF" in config_dict else config_dict
