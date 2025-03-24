@@ -14,3 +14,6 @@ wheels/
 
 #db files
 index_cache.sqlite
+
+#lock files
+*.lock
