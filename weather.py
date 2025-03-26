@@ -1,12 +1,12 @@
-from typing import Any
+from dotenv import load_dotenv
+
+print("loading environment variables")
+load_dotenv()
+
 from mcp.server.fastmcp import FastMCP
-import os
 from typing import Dict
-import sys
 from config.config import load_config
 from config.start import initialize_llm
-from typing import Any
-import httpx
 from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from mcp.server.sse import SseServerTransport
@@ -14,8 +14,6 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 from mcp.server import Server
 import uvicorn
-from starlette.middleware.cors import CORSMiddleware
-
 
 # Initialize FastMCP server
 mcp = FastMCP("weather")
@@ -187,7 +185,7 @@ def startup_event_faqs():
     # Load the configuration
     config_dict = load_config()
 
-    hardcoded_directories = ["/Users/sumedhzope/dir_test/faqs_test"]
+    hardcoded_directories = ["/Users/sumedhzope/dir_test/faqs"]
 
     # Initialize the LLM assistant
     try:
@@ -255,10 +253,12 @@ async def ask_rewards_service(user_prompt:str) -> Dict[str, str]:
 
     try:
         reward_llm.initialize_history()
+        print("init history done")
         response = reward_llm.run_stream_processes(user_prompt)
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
     
 @mcp.tool()
@@ -281,6 +281,7 @@ async def ask_cards_service(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
 
 @mcp.tool()
@@ -304,6 +305,7 @@ async def ask_bus_service(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
     
 @mcp.tool()
@@ -327,6 +329,7 @@ async def ask_orders_service(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
     
 @mcp.tool()
@@ -350,6 +353,7 @@ async def ask_hotels_service(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
     
 @mcp.tool()
@@ -371,6 +375,7 @@ async def ask_faqs(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
     
 @mcp.tool()
@@ -393,6 +398,7 @@ async def ask_loans(user_prompt:str) -> Dict[str, str]:
         return response
     
     except Exception as e:
+        print(e)
         return f"Error during question answering: {e}"
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:

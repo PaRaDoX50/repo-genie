@@ -1,5 +1,7 @@
 import os
 import sys
+import sqlite3
+import pickle
 
 import numpy as np
 from faiss import IndexFlatL2
@@ -13,7 +15,6 @@ TEXT_CHARS = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x
 
 def is_text_file(filepath):
     return not bool(open(filepath, "rb").read(1024).translate(None, TEXT_CHARS))
-
 
 def get_text_files(directory=".", ignore_paths=[]):
     text_files = []
@@ -36,22 +37,18 @@ def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
     with SqliteDict(cache_db, autocommit=True) as cache:
         for filepath in text_files:
             file_stat = os.stat(filepath)
-            file_info = cache.get(filepath)
-            if file_info and file_info["mtime"] == file_stat.st_mtime:
-                files_with_contents.append(file_info)
+            file_info_cache = cache.get(filepath)
+            if file_info_cache and file_info_cache["mtime"] == file_stat.st_mtime:
+                file_info_cache["fetchFromCache"] = True
+                files_with_contents.append(file_info_cache)
             else:
-                try:
-                    with open(filepath, "r") as file:
-                        contents = file.read()
-                except UnicodeDecodeError:
-                    print(f"Skipping {filepath} because it is not a text file.\n")
-                file_info = {
+                file_info_cache = {
                     "filepath": os.path.abspath(filepath),
-                    "contents": contents,
                     "mtime": file_stat.st_mtime,
                 }
-                cache[filepath] = file_info
-                files_with_contents.append(file_info)
+                cache[filepath] = file_info_cache
+                file_info_cache["fetchFromCache"] = False
+                files_with_contents.append(file_info_cache)
     return files_with_contents
 
 
@@ -77,26 +74,35 @@ def create_file_index(
 
     chunks = []
     embeddings_list = []
+    files = 0
     with SqliteDict(cache_db, autocommit=True) as cache:
         for file_info in files_with_contents:
+            files += 1
+            print(f"Indexing files progress: {files}/{len(files_with_contents)}")
             filepath = file_info["filepath"]
-            cached_chunks = cache.get(f"{filepath}_chunks")
-            if cached_chunks and cached_chunks["mtime"] == file_info["mtime"]:
-                chunks.extend(cached_chunks["chunks"])
-                embeddings_list.extend(cached_chunks["embeddings"])
+            if file_info["fetchFromCache"]:
+                filepath = file_info["filepath"]
+                cached_chunks = get_all_file_chunks_and_embeddings(cache_db, filepath)
+                if cached_chunks and len(cached_chunks) > 0:
+                    if verbose:
+                        print("Getting chunks and embeddings from cache for file: ", filepath)
+                    chunks_from_cache = [i["chunk"] for i in cached_chunks]
+                    embeddings_from_cache = [i["embedding"] for i in cached_chunks]
+
+                    chunks.extend(chunks_from_cache)
+                    embeddings_list.extend(embeddings_from_cache)
+                    continue
+            
+            try:
+                with open(filepath, "r") as file:
+                    contents = file.read()
+            except UnicodeDecodeError:
+                print(f"Skipping {filepath} because it is not a text file.\n")
                 continue
 
-            contents = file_info["contents"]
-            file_chunks, file_embeddings = process_file(
-                embed, filepath, contents, embed_chunk_size, verbose
-            )
+            file_chunks, file_embeddings = process_file(embed, filepath, contents, embed_chunk_size, cache_db)
             chunks.extend(file_chunks)
             embeddings_list.extend(file_embeddings)
-            cache[f"{filepath}_chunks"] = {
-                "chunks": file_chunks,
-                "embeddings": file_embeddings,
-                "mtime": file_info["mtime"],
-            }
             
     embeddings = np.array(embeddings_list)
     index = IndexFlatL2(embeddings.shape[1])
@@ -104,13 +110,15 @@ def create_file_index(
     return index, chunks
 
 
-def process_file(embed, filepath, contents, embed_chunk_size, verbose=False):
+def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=False):
     lines = contents.split("\n")
     current_chunk = ""
     start_line_number = 1
     chunks = []
     embeddings_list = []
-    print(f"Creating embeddings for {filepath}\n")
+    if verbose:
+        print(f"Creating embeddings for {filepath}\n")
+    chunk_num = 0
     for line_number, line in enumerate(lines, start=1):
         # Process each line individually if needed
         line_content = line
@@ -132,15 +140,22 @@ def process_file(embed, filepath, contents, embed_chunk_size, verbose=False):
                     line_content = line_content[split_point:]
                 else:
                     # Save the current chunk as it is, and start a new one
-                    chunks.append(
-                        {
-                            "tokens": embed.count_tokens(chunk_header + current_chunk),
-                            "text": chunk_header + current_chunk,
-                            "filepath": filepath,
-                        }
-                    )
+                    final_chunk = {
+                        "tokens": embed.count_tokens(chunk_header + current_chunk),
+                        "text": chunk_header + current_chunk,
+                        "filepath": filepath,
+                        "chunk_num": chunk_num
+                    }
+
+                    chunks.append(final_chunk)
+
                     embedding = embed.create_embedding(chunk_header + current_chunk)
                     embeddings_list.append(embedding)
+                    save_in_cache(f"{filepath}:chunk:{chunk_num}", {
+                        "chunk": final_chunk,
+                        "embedding": embedding
+                    }, cache_db)
+                    chunk_num += 1
                     current_chunk = ""
                     start_line_number = line_number  # Next chunk starts from this line
                     # Do not break; continue processing the line
@@ -151,15 +166,24 @@ def process_file(embed, filepath, contents, embed_chunk_size, verbose=False):
     # Add the remaining content as the last chunk
     if current_chunk:
         chunk_header = f"---------------\n\nUser file '{filepath}' lines {start_line_number}-{len(lines)}:\n\n"
-        chunks.append(
-            {
-                "tokens": embed.count_tokens(chunk_header + current_chunk),
-                "text": chunk_header + current_chunk,
-                "filepath": filepath,
-            }
-        )
+
+        final_chunk = {
+            "tokens": embed.count_tokens(chunk_header + current_chunk),
+            "text": chunk_header + current_chunk,
+            "filepath": filepath,
+            "chunk_num": chunk_num
+        }
+
+        chunks.append(final_chunk)
+
         embedding = embed.create_embedding(chunk_header + current_chunk)
         embeddings_list.append(embedding)
+
+        save_in_cache(f"{filepath}:chunk:{chunk_num}", {
+            "chunk": final_chunk,
+            "embedding": embedding
+        }, cache_db)
+        chunk_num += 1
     return chunks, embeddings_list
 
 
@@ -185,3 +209,12 @@ def search_index(embed, index, query, all_chunks):
         raise e
     relevant_chunks = [all_chunks[i] for i in indices[0] if i != -1]
     return relevant_chunks
+
+def get_all_file_chunks_and_embeddings(cache_db, file_name):
+    conn = sqlite3.connect(cache_db)
+    result = conn.execute(f"SELECT * FROM unnamed WHERE key LIKE '{file_name}:chunk:%'").fetchall()
+    return [pickle.loads(res[1]) for res in result]
+
+def save_in_cache(key, value, cache_db):
+    with SqliteDict(cache_db, autocommit=True) as cache:
+        cache[key] = value

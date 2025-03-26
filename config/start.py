@@ -1,6 +1,3 @@
-import os
-import sys
-
 import litellm
 
 from assistant.index import create_file_index

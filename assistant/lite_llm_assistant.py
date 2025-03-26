@@ -52,7 +52,7 @@ class LiteLLMAssistant(CGRAGAssistant):
                 **self.completion_options,
                 messages=chat_history_cleaned,
                 stream=True,
-                num_ctx=self.context_size,
+                num_ctx=self.context_size
             )
         else:
             return completion(

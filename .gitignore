@@ -17,3 +17,4 @@ index_cache.sqlite
 
 #lock files
 *.lock
+config/config.toml

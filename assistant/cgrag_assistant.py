@@ -38,7 +38,7 @@ answer the prompt, including those in the included files and those which the inc
 response will be used to create an LLM embedding that will be used in a RAG to find the appropriate files which are 
 needed to answer the user prompt. There may be many files not currently included which have more relevant information, 
 so your response must include the most important concepts and information required to accurately answer the user 
-prompt. Keep the list length to around 40 items. If the prompt is referencing code, list specific class, 
+prompt. Keep the list length to around 100 items. If the prompt is referencing code, list specific class, 
 function, and variable names as applicable to answering the user prompt.
 """
 
