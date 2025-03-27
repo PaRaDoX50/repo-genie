@@ -5,7 +5,6 @@ from colorama import Fore, Style
 
 from assistant.index import search_index
 
-
 class BaseAssistant:
     """
     A base class for LLM assistants that enables inclusion of local files in the LLM context. Files

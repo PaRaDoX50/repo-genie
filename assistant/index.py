@@ -1,11 +1,10 @@
 import os
 import sys
-import sqlite3
 import pickle
 
 import numpy as np
 from faiss import IndexFlatL2
-from sqlitedict import SqliteDict
+from db.sqlite_db_helper import SqliteDBHelper
 
 from config.config import get_file_path, INDEX_CACHE_FILENAME, \
     INDEX_CACHE_PATH
@@ -34,21 +33,29 @@ def get_text_files(directory=".", ignore_paths=[]):
 def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
     text_files = get_text_files(directory, ignore_paths)
     files_with_contents = []
-    with SqliteDict(cache_db, autocommit=True) as cache:
-        for filepath in text_files:
-            file_stat = os.stat(filepath)
-            file_info_cache = cache.get(filepath)
-            if file_info_cache and file_info_cache["mtime"] == file_stat.st_mtime:
-                file_info_cache["fetchFromCache"] = True
-                files_with_contents.append(file_info_cache)
-            else:
-                file_info_cache = {
-                    "filepath": os.path.abspath(filepath),
-                    "mtime": file_stat.st_mtime,
-                }
-                cache[filepath] = file_info_cache
-                file_info_cache["fetchFromCache"] = False
-                files_with_contents.append(file_info_cache)
+    cache = SqliteDBHelper(cache_db)
+    for filepath in text_files:
+        file_stat = os.stat(filepath)
+
+        query = f"SELECT * FROM unnamed WHERE key = ?"
+        result = cache.getOne(query, (filepath,))
+
+        file_info_cache = None
+        if result is not None:
+            file_info_cache = pickle.loads(result[1])
+            
+        if file_info_cache and file_info_cache["mtime"] == file_stat.st_mtime:
+            file_info_cache["fetchFromCache"] = True
+            files_with_contents.append(file_info_cache)
+        else:
+            file_info_cache = {
+                "filepath": os.path.abspath(filepath),
+                "mtime": file_stat.st_mtime,
+            }
+            cache[filepath] = file_info_cache
+            file_info_cache["fetchFromCache"] = False
+            files_with_contents.append(file_info_cache)
+
     return files_with_contents
 
 
@@ -75,34 +82,33 @@ def create_file_index(
     chunks = []
     embeddings_list = []
     files = 0
-    with SqliteDict(cache_db, autocommit=True) as cache:
-        for file_info in files_with_contents:
-            files += 1
-            print(f"Indexing files progress: {files}/{len(files_with_contents)}")
+    for file_info in files_with_contents:
+        files += 1
+        print(f"Indexing files progress: {files}/{len(files_with_contents)}")
+        filepath = file_info["filepath"]
+        if file_info["fetchFromCache"]:
             filepath = file_info["filepath"]
-            if file_info["fetchFromCache"]:
-                filepath = file_info["filepath"]
-                cached_chunks = get_all_file_chunks_and_embeddings(cache_db, filepath)
-                if cached_chunks and len(cached_chunks) > 0:
-                    if verbose:
-                        print("Getting chunks and embeddings from cache for file: ", filepath)
-                    chunks_from_cache = [i["chunk"] for i in cached_chunks]
-                    embeddings_from_cache = [i["embedding"] for i in cached_chunks]
+            cached_chunks = get_all_file_chunks_and_embeddings(cache_db, filepath)
+            if cached_chunks and len(cached_chunks) > 0:
+                if verbose:
+                    print("Getting chunks and embeddings from cache for file: ", filepath)
+                chunks_from_cache = [i["chunk"] for i in cached_chunks]
+                embeddings_from_cache = [i["embedding"] for i in cached_chunks]
 
-                    chunks.extend(chunks_from_cache)
-                    embeddings_list.extend(embeddings_from_cache)
-                    continue
-            
-            try:
-                with open(filepath, "r") as file:
-                    contents = file.read()
-            except UnicodeDecodeError:
-                print(f"Skipping {filepath} because it is not a text file.\n")
+                chunks.extend(chunks_from_cache)
+                embeddings_list.extend(embeddings_from_cache)
                 continue
+        
+        try:
+            with open(filepath, "r") as file:
+                contents = file.read()
+        except UnicodeDecodeError:
+            print(f"Skipping {filepath} because it is not a text file.\n")
+            continue
 
-            file_chunks, file_embeddings = process_file(embed, filepath, contents, embed_chunk_size, cache_db)
-            chunks.extend(file_chunks)
-            embeddings_list.extend(file_embeddings)
+        file_chunks, file_embeddings = process_file(embed, filepath, contents, embed_chunk_size, cache_db)
+        chunks.extend(file_chunks)
+        embeddings_list.extend(file_embeddings)
             
     embeddings = np.array(embeddings_list)
     index = IndexFlatL2(embeddings.shape[1])
@@ -116,6 +122,7 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
     start_line_number = 1
     chunks = []
     embeddings_list = []
+    cache = SqliteDBHelper(cache_db)
     if verbose:
         print(f"Creating embeddings for {filepath}\n")
     chunk_num = 0
@@ -151,10 +158,11 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
 
                     embedding = embed.create_embedding(chunk_header + current_chunk)
                     embeddings_list.append(embedding)
-                    save_in_cache(f"{filepath}:chunk:{chunk_num}", {
+                    query = "insert into unnamed (key, value) values (?, ?)"
+                    cache.save(query, (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
                         "chunk": final_chunk,
                         "embedding": embedding
-                    }, cache_db)
+                    })))
                     chunk_num += 1
                     current_chunk = ""
                     start_line_number = line_number  # Next chunk starts from this line
@@ -179,10 +187,10 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
         embedding = embed.create_embedding(chunk_header + current_chunk)
         embeddings_list.append(embedding)
 
-        save_in_cache(f"{filepath}:chunk:{chunk_num}", {
+        cache.save("insert into unnamed (key, value) values (?, ?)", (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
             "chunk": final_chunk,
             "embedding": embedding
-        }, cache_db)
+        })))
         chunk_num += 1
     return chunks, embeddings_list
 
@@ -211,10 +219,6 @@ def search_index(embed, index, query, all_chunks):
     return relevant_chunks
 
 def get_all_file_chunks_and_embeddings(cache_db, file_name):
-    conn = sqlite3.connect(cache_db)
-    result = conn.execute(f"SELECT * FROM unnamed WHERE key LIKE '{file_name}:chunk:%'").fetchall()
+    cache = SqliteDBHelper(cache_db)
+    result = cache.get("SELECT * FROM unnamed WHERE key LIKE ?", (f"{file_name}:chunk:%",))
     return [pickle.loads(res[1]) for res in result]
-
-def save_in_cache(key, value, cache_db):
-    with SqliteDict(cache_db, autocommit=True) as cache:
-        cache[key] = value
