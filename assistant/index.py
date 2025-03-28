@@ -1,6 +1,7 @@
 import os
 import sys
 import pickle
+import asyncio
 
 import numpy as np
 from faiss import IndexFlatL2
@@ -10,7 +11,6 @@ from config.config import get_file_path, INDEX_CACHE_FILENAME, \
     INDEX_CACHE_PATH
 
 TEXT_CHARS = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x7F})
-
 
 def is_text_file(filepath):
     return not bool(open(filepath, "rb").read(1024).translate(None, TEXT_CHARS))
@@ -29,7 +29,6 @@ def get_text_files(directory, ignore_paths=[]):
                 text_files.append(filepath)
     return text_files
 
-
 def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
     text_files = get_text_files(directory, ignore_paths)
     files_with_contents = []
@@ -37,14 +36,14 @@ def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
     for filepath in text_files:
         file_stat = os.stat(filepath)
 
-        query = f"SELECT * FROM unnamed WHERE key = ?"
+        query = f"SELECT * FROM embedding_store WHERE key = ?"
         result = cache.getOne(query, (filepath,))
 
         file_info_cache = None
         if result is not None:
             file_info_cache = pickle.loads(result[1])
             
-        if file_info_cache and file_info_cache["mtime"] == file_stat.st_mtime:
+        if file_info_cache and (int(file_info_cache["mtime"]) >= int(file_stat.st_mtime)):
             file_info_cache["fetchFromCache"] = True
             files_with_contents.append(file_info_cache)
         else:
@@ -52,12 +51,11 @@ def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
                 "filepath": os.path.abspath(filepath),
                 "mtime": file_stat.st_mtime,
             }
-            cache.save("INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)", (filepath, pickle.dumps(file_info_cache)))
+            cache.save("INSERT OR IGNORE INTO embedding_store (key, value) values (?, ?)", (filepath, pickle.dumps(file_info_cache)))
             file_info_cache["fetchFromCache"] = False
             files_with_contents.append(file_info_cache)
 
     return files_with_contents
-
 
 def create_file_index(
     embed, ignore_paths, embed_chunk_size, extra_dirs=[], verbose=False
@@ -99,14 +97,8 @@ def create_file_index(
                 embeddings_list.extend(embeddings_from_cache)
                 continue
         
-        try:
-            with open(filepath, "r") as file:
-                contents = file.read()
-        except UnicodeDecodeError:
-            print(f"Skipping {filepath} because it is not a text file.\n")
-            continue
 
-        file_chunks, file_embeddings = process_file(embed, filepath, contents, embed_chunk_size, cache_db)
+        file_chunks, file_embeddings = asyncio.run(process_file(embed, filepath, embed_chunk_size, cache_db))
         chunks.extend(file_chunks)
         embeddings_list.extend(file_embeddings)
             
@@ -115,19 +107,15 @@ def create_file_index(
     index.add(embeddings)
     return index, chunks
 
-
-def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=False):
-    lines = contents.split("\n")
+async def process_file(embed, filepath, embed_chunk_size, cache_db, verbose=False):
     current_chunk = ""
     start_line_number = 1
     chunks = []
-    embeddings_list = []
     cache = SqliteDBHelper(cache_db)
     if verbose:
         print(f"Creating embeddings for {filepath}\n")
     chunk_num = 0
-    for line_number, line in enumerate(lines, start=1):
-        # Process each line individually if needed
+    for line_number, line in read_large_file(filepath):
         line_content = line
         while line_content:
             proposed_chunk = current_chunk + line_content + "\n"
@@ -156,13 +144,6 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
 
                     chunks.append(final_chunk)
 
-                    embedding = embed.create_embedding(chunk_header + current_chunk)
-                    embeddings_list.append(embedding)
-                    query = "INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)"
-                    cache.save(query, (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
-                        "chunk": final_chunk,
-                        "embedding": embedding
-                    })))
                     chunk_num += 1
                     current_chunk = ""
                     start_line_number = line_number  # Next chunk starts from this line
@@ -173,7 +154,7 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
                         break
     # Add the remaining content as the last chunk
     if current_chunk:
-        chunk_header = f"---------------\n\nUser file '{filepath}' lines {start_line_number}-{len(lines)}:\n\n"
+        chunk_header = f"---------------\n\nUser file '{filepath}' lines {start_line_number}-Last_line:\n\n"
 
         final_chunk = {
             "tokens": embed.count_tokens(chunk_header + current_chunk),
@@ -184,16 +165,10 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
 
         chunks.append(final_chunk)
 
-        embedding = embed.create_embedding(chunk_header + current_chunk)
-        embeddings_list.append(embedding)
-
-        cache.save("INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)", (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
-            "chunk": final_chunk,
-            "embedding": embedding
-        })))
         chunk_num += 1
-    return chunks, embeddings_list
 
+    embeddings_list = await async_create_embedding_for_chunk(embed, chunks, cache, filepath)
+    return chunks, embeddings_list
 
 def find_split_point(embed, line_content, max_size, header):
     low = 0
@@ -205,7 +180,6 @@ def find_split_point(embed, line_content, max_size, header):
         else:
             high = mid
     return low - 1
-
 
 def search_index(embed, index, query, all_chunks):
     query_embedding = embed.create_embedding(query)
@@ -220,5 +194,50 @@ def search_index(embed, index, query, all_chunks):
 
 def get_all_file_chunks_and_embeddings(cache_db, file_name):
     cache = SqliteDBHelper(cache_db)
-    result = cache.get("SELECT * FROM unnamed WHERE key LIKE ?", (f"{file_name}:chunk:%",))
+    result = cache.get("SELECT * FROM embedding_store WHERE key LIKE ?", (f"{file_name}:chunk:%",))
     return [pickle.loads(res[1]) for res in result]
+
+def read_large_file(filepath):
+    line_number = 0
+    try:
+        with open(filepath, "r", encoding="utf-8") as file:
+            for line in file:
+                line_number += 1
+                yield line_number, line  # Yield one line at a time
+    except UnicodeDecodeError:
+        print(f"Skipping {filepath} because it is not a text file.\n")
+        return
+    
+def create_embedding_for_chunk(embed, chunk_list, cache, filepath):
+    embeddings_list = []
+    for chunk in chunk_list:
+        embedding = embed.create_embedding(chunk["text"])
+        embeddings_list.append(embedding)
+
+        query = "INSERT OR IGNORE INTO embedding_store (key, value) values (?, ?)"
+
+        cache.save(query, (f"{filepath}:chunk:{chunk["chunk_num"]}", pickle.dumps({
+            "chunk": chunk,
+            "embedding": embedding
+        })))
+    return embeddings_list
+
+async def async_create_embedding_for_chunk(embed, chunk_list, cache, filepath):
+    future_embeddings = []
+    for chunk in chunk_list:
+        embedding = embed.async_create_embedding(chunk["text"])
+        future_embeddings.append(embedding)
+
+    embeddings_list = await asyncio.gather(*future_embeddings)
+
+    embeddings_list = list(map(lambda x: x["data"][0]["embedding"], embeddings_list))
+
+    for chunk,embedding in zip(chunk_list, embeddings_list):
+        query = "INSERT OR IGNORE INTO embedding_store (key, value) values (?, ?)"
+
+        cache.save(query, (f"{filepath}:chunk:{chunk["chunk_num"]}", pickle.dumps({
+            "chunk": chunk,
+            "embedding": embedding
+        })))
+
+    return embeddings_list
