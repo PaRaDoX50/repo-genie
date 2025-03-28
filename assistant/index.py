@@ -15,7 +15,7 @@ TEXT_CHARS = bytearray({7, 8, 9, 10, 12, 13, 27} | set(range(0x20, 0x100)) - {0x
 def is_text_file(filepath):
     return not bool(open(filepath, "rb").read(1024).translate(None, TEXT_CHARS))
 
-def get_text_files(directory=".", ignore_paths=[]):
+def get_text_files(directory, ignore_paths=[]):
     text_files = []
     for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if os.path.join(root, d) not in ignore_paths]
@@ -52,7 +52,7 @@ def get_files_with_contents(directory, ignore_paths, cache_db, verbose):
                 "filepath": os.path.abspath(filepath),
                 "mtime": file_stat.st_mtime,
             }
-            cache[filepath] = file_info_cache
+            cache.save("INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)", (filepath, pickle.dumps(file_info_cache)))
             file_info_cache["fetchFromCache"] = False
             files_with_contents.append(file_info_cache)
 
@@ -66,7 +66,6 @@ def create_file_index(
 
     files_with_contents = []
 
-    # Add files from additional folders
     for folder in extra_dirs:
         if os.path.exists(folder):
             folder_files = get_files_with_contents(
@@ -84,7 +83,8 @@ def create_file_index(
     files = 0
     for file_info in files_with_contents:
         files += 1
-        print(f"Indexing files progress: {files}/{len(files_with_contents)}")
+        if verbose:
+            print(f"Indexing files progress: {files}/{len(files_with_contents)}")
         filepath = file_info["filepath"]
         if file_info["fetchFromCache"]:
             filepath = file_info["filepath"]
@@ -158,7 +158,7 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
 
                     embedding = embed.create_embedding(chunk_header + current_chunk)
                     embeddings_list.append(embedding)
-                    query = "insert into unnamed (key, value) values (?, ?)"
+                    query = "INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)"
                     cache.save(query, (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
                         "chunk": final_chunk,
                         "embedding": embedding
@@ -187,7 +187,7 @@ def process_file(embed, filepath, contents, embed_chunk_size, cache_db, verbose=
         embedding = embed.create_embedding(chunk_header + current_chunk)
         embeddings_list.append(embedding)
 
-        cache.save("insert into unnamed (key, value) values (?, ?)", (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
+        cache.save("INSERT OR IGNORE INTO unnamed (key, value) values (?, ?)", (f"{filepath}:chunk:{chunk_num}", pickle.dumps({
             "chunk": final_chunk,
             "embedding": embedding
         })))

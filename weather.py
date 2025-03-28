@@ -14,6 +14,7 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 from mcp.server import Server
 import uvicorn
+from annotations.log_time import log_execution_time
 
 # Initialize FastMCP server
 mcp = FastMCP("weather")
@@ -25,7 +26,9 @@ orders_llm = None
 hotels_llm = None
 faq_llm = None
 loans_llm = None
+logs_llm = None
 
+@log_execution_time
 def startup_event_reward():
     """
     Initializes the LLM assistant and indexes the rewards service when the server starts.
@@ -56,6 +59,7 @@ def startup_event_reward():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_cards():
     """
     Initializes the LLM assistant and indexes the cards service when the server starts.
@@ -86,6 +90,7 @@ def startup_event_cards():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_bus():
     """
     Initializes the LLM assistant and indexes the bus service when the server starts.
@@ -116,6 +121,7 @@ def startup_event_bus():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_orders():
     """
     Initializes the LLM assistant and indexes the orders service when the server starts.
@@ -146,6 +152,7 @@ def startup_event_orders():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_hotels():
     """
     Initializes the LLM assistant and indexes the hotels service when the server starts.
@@ -176,6 +183,7 @@ def startup_event_hotels():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_faqs():
     """
     Initializes the LLM assistant and indexes the faq service when the server starts.
@@ -206,6 +214,7 @@ def startup_event_faqs():
         print(f"Error during startup: {e}")
         raise  # Re-raise the exception to prevent the server from starting
 
+@log_execution_time
 def startup_event_loans():
     """
     Initializes the LLM assistant and indexes the loans service when the server starts.
@@ -231,6 +240,37 @@ def startup_event_loans():
         print("Initializing loans assistant...")
         loans_llm = initialize_llm(args, config_dict)
         print("Loans Assistant initialized successfully.")
+
+    except Exception as e:
+        print(f"Error during startup: {e}")
+        raise  # Re-raise the exception to prevent the server from starting
+
+@log_execution_time
+def startup_event_logs():
+    """
+    Initializes the LLM assistant and indexes the logs service when the server starts.
+    """
+    global logs_llm
+
+    # Load the configuration
+    config_dict = load_config()
+
+    hardcoded_directories = ["/Users/sumedhzope/dir_test/logs"]
+
+    # Initialize the LLM assistant
+    try:
+        # Create dummy args for command line
+        class Args:
+            ignore = []
+            dirs = hardcoded_directories
+            single_prompt = None
+            verbose = False
+            no_color = True  # Set no_color to True for server use
+            use_cgrag = True
+        args = Args()
+        print("Initializing logs assistant...")
+        logs_llm = initialize_llm(args, config_dict)
+        print("Logs Assistant initialized successfully.")
 
     except Exception as e:
         print(f"Error during startup: {e}")
@@ -400,6 +440,28 @@ async def ask_loans(user_prompt:str) -> Dict[str, str]:
     except Exception as e:
         print(e)
         return f"Error during question answering: {e}"
+    
+@mcp.tool()
+async def ask_logs(user_prompt:str) -> Dict[str, str]:
+    """
+    Logs service tool
+    Platform used for answering all queries related to logs
+
+    Args:
+        user_prompt: The user's question or prompt.
+    """
+    global logs_llm
+    if logs_llm is None:
+        return "The assistant is not initialized yet. Please try again later."
+
+    try:
+        logs_llm.initialize_history()
+        response = logs_llm.run_stream_processes(user_prompt)
+        return response
+    
+    except Exception as e:
+        print(e)
+        return f"Error during question answering: {e}"
 
 def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
     """Create a Starlette application that serves the provided MCP server with SSE."""
@@ -436,6 +498,7 @@ if __name__ == "__main__":
     startup_event_hotels()
     startup_event_faqs()
     startup_event_loans()
+    startup_event_logs()
     mcp_server = mcp._mcp_server
 
     import argparse
